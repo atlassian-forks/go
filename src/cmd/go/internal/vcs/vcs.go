@@ -5,7 +5,11 @@
 package vcs
 
 import (
-	"encoding/json"
+	"cmd/go/internal/base"
+	"cmd/go/internal/cfg"
+	"cmd/go/internal/search"
+	"cmd/go/internal/str"
+	"cmd/go/internal/web"
 	"errors"
 	"fmt"
 	exec "internal/execabs"
@@ -19,12 +23,6 @@ import (
 	"regexp"
 	"strings"
 	"sync"
-
-	"cmd/go/internal/base"
-	"cmd/go/internal/cfg"
-	"cmd/go/internal/search"
-	"cmd/go/internal/str"
-	"cmd/go/internal/web"
 
 	"golang.org/x/mod/module"
 )
@@ -1189,8 +1187,9 @@ var vcsPaths = []*vcsPath{
 	{
 		pathPrefix: "bitbucket.org",
 		regexp:     lazyregexp.New(`^(?P<root>bitbucket\.org/(?P<bitname>[A-Za-z0-9_.\-]+/[A-Za-z0-9_.\-]+))(/[A-Za-z0-9_.\-]+)*$`),
+		vcs:        "git",
 		repo:       "https://{root}",
-		check:      bitbucketVCS,
+		check:      noVCSSuffix,
 	},
 
 	// IBM DevOps Services (JazzHub)
@@ -1260,56 +1259,6 @@ func noVCSSuffix(match map[string]string) error {
 		}
 	}
 	return nil
-}
-
-// bitbucketVCS determines the version control system for a
-// Bitbucket repository, by using the Bitbucket API.
-func bitbucketVCS(match map[string]string) error {
-	if err := noVCSSuffix(match); err != nil {
-		return err
-	}
-
-	var resp struct {
-		SCM string `json:"scm"`
-	}
-	url := &urlpkg.URL{
-		Scheme:   "https",
-		Host:     "api.bitbucket.org",
-		Path:     expand(match, "/2.0/repositories/{bitname}"),
-		RawQuery: "fields=scm",
-	}
-	data, err := web.GetBytes(url)
-	if err != nil {
-		if httpErr, ok := err.(*web.HTTPError); ok && httpErr.StatusCode == 403 {
-			// this may be a private repository. If so, attempt to determine which
-			// VCS it uses. See issue 5375.
-			root := match["root"]
-			for _, vcs := range []string{"git", "hg"} {
-				if vcsByCmd(vcs).Ping("https", root) == nil {
-					resp.SCM = vcs
-					break
-				}
-			}
-		}
-
-		if resp.SCM == "" {
-			return err
-		}
-	} else {
-		if err := json.Unmarshal(data, &resp); err != nil {
-			return fmt.Errorf("decoding %s: %v", url, err)
-		}
-	}
-
-	if vcsByCmd(resp.SCM) != nil {
-		match["vcs"] = resp.SCM
-		if resp.SCM == "git" {
-			match["repo"] += ".git"
-		}
-		return nil
-	}
-
-	return fmt.Errorf("unable to detect version control system for bitbucket.org/ path")
 }
 
 // launchpadVCS solves the ambiguity for "lp.net/project/foo". In this case,
